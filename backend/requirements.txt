@@ -1,0 +1,5 @@
+openai
+openai-agents
+requests
+python-dotenv
+anthropic
