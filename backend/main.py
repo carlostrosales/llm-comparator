@@ -7,35 +7,6 @@ from anthropic import AsyncAnthropic
 
 load_dotenv(override=True)
 
-anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
-google_api_key = os.getenv('GOOGLE_API_KEY')
-deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
-groq_api_key = os.getenv('GROQ_API_KEY')
-
-    
-if anthropic_api_key:
-    print(f"Anthropic API Key exists and begins {anthropic_api_key[:7]}")
-else:
-    print("Anthropic API Key not set (and this is optional)")
-
-if google_api_key:
-    print(f"Google API Key exists and begins {google_api_key[:2]}")
-else:
-    print("Google API Key not set (and this is optional)")
-
-if deepseek_api_key:
-    print(f"DeepSeek API Key exists and begins {deepseek_api_key[:3]}")
-else:
-    print("DeepSeek API Key not set (and this is optional)")
-
-if groq_api_key:
-    print(f"Groq API Key exists and begins {groq_api_key[:4]}")
-else:
-    print("Groq API Key not set (and this is optional)")
-
-
-print("\n\n\n\n\n\n")
-
 async def generate_question(client: AsyncOpenAI, seed_prompt: str) -> str:
     """
     Ask the model to generate a challenging, nuanced question. 
@@ -47,105 +18,77 @@ async def generate_question(client: AsyncOpenAI, seed_prompt: str) -> str:
     except APIStatusError as e:
         raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
-competitors = []
-answers = []
-messages=[{"role": "user", "content": question}]
 
+async def query_gpt(client: AsyncOpenAI, question: str, model_name: str) -> str:
+    try:
+        resp = await client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": question}])
+        return resp.choices[0].message.content.strip()
+    except APIStatusError as e:
+        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
-# first answer from model 1
-model_name = "gpt-4o-mini"
-response = openai.chat.completions.create(model=model_name,messages=messages)
-answer = response.choices[0].message.content
-# print(answer + "\n\n\n\n\n\n")
+async def query_claude(client: AsyncAnthropic, question: str, model_name: str) -> str:
+    try:
+        resp = client.messages.create(model=model_name, messages=[{"role": "user", "content": question}], max_tokens=1000)
+        return resp.content[0].text.strip()
+    except APIStatusError as e:
+        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
-competitors.append(model_name)
-answers.append(answer)
+async def format_responses(answers: list) -> any:
+    together = ""
+    for index, answer in enumerate(answers):
+        together += f"# Response from competitor {index + 1}\n\n"
+        together += answer + "\n\n"
+    return together
 
-# second answer from model 2
-model_name = "claude-3-7-sonnet-latest"
-claude = Anthropic()
-response = claude.messages.create(model=model_name, messages=messages, max_tokens=1000)
-answer = response.content[0].text
-# print(answer + "\n\n\n\n\n\n")
+async def rank_responses(client: AsyncOpenAI, competitors: list, question, together) -> str:
 
-competitors.append(model_name)
-answers.append(answer)
+    try:
+        judge = f"""You are judging a competition between {len(competitors)} competitors.
 
-# third answer from model 3
-model_name = "gemini-2.0-flash"
-gemini = OpenAI(api_key=google_api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
-response = gemini.chat.completions.create(model=model_name,messages=messages)
-answer = response.choices[0].message.content
-# print(answer + "\n\n\n\n\n\n")
+        {question}
 
-competitors.append(model_name)
-answers.append(answer)
+        Your job is to evaluate each response for clarity and strength of argument, and rank them in order of best to worst.
+        Respond with JSON, and only JSON, with the following format:
+        {{"results": ["best competitor number", "second best competitor number", "third best competitor number", ...]}}
 
-# fourth answer from model 4
-model_name="deepseek-chat"
-deepseek = OpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com/v1")
-response = deepseek.chat.completions.create(model=model_name, messages=messages)
-answer = response.choices[0].message.content
-# print(answer + "\n\n\n\n\n\n")
+        Here are the responses from each competitor:
 
-competitors.append(model_name)
-answers.append(answer)
+        {together}
 
+        Now respond with the JSON with the ranked order of the competitors, nothing else. Do not include markdown formatting or code blocks."""
 
-# fifth answer from model 5
-model_name = "llama-3.3-70b-versatile"
-groq = OpenAI(api_key=groq_api_key, base_url="https://api.groq.com/openai/v1")
-response = groq.chat.completions.create(model=model_name, messages=messages)
-answer = response.choices[0].message.content
-# print(answer + "\n\n\n\n\n\n")
+        judge_messages = [{"role": "user", "content": judge}]
 
-competitors.append(model_name)
-answers.append(answer)
+        # judgment time
+        response = await client.chat.completions.create(
+            model="o3-mini",
+            messages=judge_messages,
+        )
+        return response.choices[0].message.content.strip()
+    except APIStatusError as e:
+        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
 
 
-together = ""
-for index, answer in enumerate(answers):
-    together += f"# Response from competitor {index + 1}\n\n"
-    together += answer + "\n\n"
 
-judge = f"""You are judging a competition between {len(competitors)} competitors.
-
-{question}
-
-Your job is to evaluate each response for clarity and strength of argument, and rank them in order of best to worst.
-Respond with JSON, and only JSON, with the following format:
-{{"results": ["best competitor number", "second best competitor number", "third best competitor number", ...]}}
-
-Here are the responses from each competitor:
-
-{together}
-
-Now respond with the JSON with the ranked order of the competitors, nothing else. Do not include markdown formatting or code blocks."""
-
-judge_messages = [{"role": "user", "content": judge}]
-
-# judgment time
-openai = OpenAI()
-openai = OpenAI()
-response = openai.chat.completions.create(
-    model="o3-mini",
-    messages=judge_messages,
-)
-results = response.choices[0].message.content
-
-# Turn into readable results
-results_dict = json.loads(results)
-ranks = results_dict["results"]
-for index, result in enumerate(ranks):
-    competitor = competitors[int(result) - 1]
-    print(f"Rank {index+1}: {competitor}")
+async def print_rankings(rankings, competitors) -> None:
+    # Turn into readable results
+    results_dict = json.loads(rankings)
+    ranks = results_dict["results"]
+    for index, result in enumerate(ranks):
+        competitor = competitors[int(result) - 1]
+        print(f"Rank {index+1}: {competitor}")
 
 
 async def main():
     openai_api_key = os.getenv('OPENAI_API_KEY')
-    if not openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY not set.")
+    anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
+    google_api_key = os.getenv('GOOGLE_API_KEY')
+    deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
+    groq_api_key = os.getenv('GROQ_API_KEY')
+
+    if not openai_api_key or not anthropic_api_key or not google_api_key or not deepseek_api_key or not groq_api_key:
+        raise RuntimeError("One of your keys are not set.")
 
     client = AsyncOpenAI()
 
@@ -156,6 +99,53 @@ async def main():
 
     question = await generate_question(client, seed_prompt)
     print("Generated Question: \n\n\n", question)
+
+    competitors = []
+    answers = []
+
+    # first answer from model
+    gptMini = "gpt-4o-mini"
+    answer = await query_gpt(client, question, gptMini)
+    competitors.append(gptMini)
+    answers.append(answer)
+
+    # second answer from model
+    claude = "claude-3-7-sonnet-latest"
+    claudeClient = Anthropic()
+    answer = await query_claude(claudeClient, question, claude)
+    competitors.append(claude)
+    answers.append(answer)
+
+    # third answer from model
+    gemini = "gemini-2.0-flash"
+    geminiClient = AsyncOpenAI(api_key=google_api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    answer = await query_gpt(geminiClient, question, gemini)
+    competitors.append(gemini)
+    answers.append(answer)
+
+    # fourth answer from model
+    deepseek="deepseek-chat"
+    deepseekClient = AsyncOpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com/v1")
+    answer = await query_gpt(deepseekClient, question, deepseek)
+    competitors.append(deepseek)
+    answers.append(answer)
+
+    # fifth answer from model
+    llama = "llama-3.3-70b-versatile"
+    groqClient = AsyncOpenAI(api_key=groq_api_key, base_url="https://api.groq.com/openai/v1")
+    answer = await query_gpt(groqClient, question, llama)
+    competitors.append(llama)
+    answers.append(answer)
+
+    # format all llm answers
+    formattedAnswers = await format_responses(answers)
+
+    # rank llm answers
+    rankedAnswers = await rank_responses(client, competitors, question, formattedAnswers)
+
+    # print answers
+    await print_rankings(rankedAnswers, competitors)
+
 
 
 if __name__== "__main__":
