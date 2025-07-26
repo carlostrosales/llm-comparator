@@ -28,7 +28,7 @@ async def query_gpt(client: AsyncOpenAI, question: str, model_name: str) -> str:
 
 async def query_claude(client: AsyncAnthropic, question: str, model_name: str) -> str:
     try:
-        resp = client.messages.create(model=model_name, messages=[{"role": "user", "content": question}], max_tokens=1000)
+        resp = await client.messages.create(model=model_name, messages=[{"role": "user", "content": question}], max_tokens=1000)
         return resp.content[0].text.strip()
     except APIStatusError as e:
         raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
@@ -111,7 +111,7 @@ async def main():
 
     # second answer from model
     claude = "claude-3-7-sonnet-latest"
-    claudeClient = Anthropic()
+    claudeClient = AsyncAnthropic()
     answer = await query_claude(claudeClient, question, claude)
     competitors.append(claude)
     answers.append(answer)
