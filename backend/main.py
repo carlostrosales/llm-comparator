@@ -1,11 +1,35 @@
 import os
 import json
-import asyncio
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, APIStatusError
 from anthropic import AsyncAnthropic
+from fastapi import FastAPI, HTTPException
+from typing import List, Literal
+
 
 load_dotenv(override=True)
+
+app = FastAPI()
+
+# -------------------------------------------------------- Pydantic Schemas --------------------------------------------------------
+
+class RunRequest(BaseModel):
+    seed_prompt: str | None = None
+    competitors: List[str] = [
+        "gpt-4o-mini",
+        "claude-3-7-sonnet-latest",
+        "gemini-2.0-flash",
+        "deepseek-chat",
+        "llama-3.3-70b-versatile",
+    ]
+
+class RankedResult(BaseModel):
+    question: str
+    answers: List[dict]
+    ranking: List[dict]
+    raw_ranking_json: str
+
+# -------------------------------------------------------- Core Helpers --------------------------------------------------------
 
 async def generate_question(client: AsyncOpenAI, seed_prompt: str) -> str:
     """
@@ -69,8 +93,6 @@ async def rank_responses(client: AsyncOpenAI, competitors: list, question, toget
         raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
 
-
-
 async def print_rankings(rankings, competitors) -> None:
     # Turn into readable results
     results_dict = json.loads(rankings)
@@ -80,7 +102,12 @@ async def print_rankings(rankings, competitors) -> None:
         print(f"Rank {index+1}: {competitor}")
 
 
-async def main():
+
+
+# -------------------------------------------------------- Main Endpoint --------------------------------------------------------
+
+@app.post("/run", response_model=RankedResult)
+async def run_competition(body: RunRequest):
     openai_api_key = os.getenv('OPENAI_API_KEY')
     anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
     google_api_key = os.getenv('GOOGLE_API_KEY')
@@ -88,51 +115,52 @@ async def main():
     groq_api_key = os.getenv('GROQ_API_KEY')
 
     if not openai_api_key or not anthropic_api_key or not google_api_key or not deepseek_api_key or not groq_api_key:
-        raise RuntimeError("One of your keys are not set.")
+        raise HTTPException(status_code=500, detail="One of your keys is not set.")
 
-    client = AsyncOpenAI()
+    # provider clients
+    openaiClient = AsyncOpenAI()
+    claudeClient = AsyncAnthropic()
+    geminiClient = AsyncOpenAI(api_key=google_api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    deepseekClient = AsyncOpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com/v1")
+    groqClient = AsyncOpenAI(api_key=groq_api_key, base_url="https://api.groq.com/openai/v1")
 
-    seed_prompt = (
+    seed_prompt = body.seed_prompt or (
         "Please come up with a challenging, nuanced question that I can ask a number "
         "of LLMs to evaluate their intelligence. Answer only with the question, no explanation."
     )
 
-    question = await generate_question(client, seed_prompt)
-    print("Generated Question: \n\n\n", question)
+    question = await generate_question(openaiClient, seed_prompt)
 
-    competitors = []
-    answers = []
+    competitors = body.competitors
+    answers: List[str] = []
+    models_and_clients = []
 
     # first answer from model
     gptMini = "gpt-4o-mini"
-    answer = await query_gpt(client, question, gptMini)
+    answer = await query_gpt(openaiClient, question, gptMini)
     competitors.append(gptMini)
     answers.append(answer)
 
     # second answer from model
     claude = "claude-3-7-sonnet-latest"
-    claudeClient = AsyncAnthropic()
     answer = await query_claude(claudeClient, question, claude)
     competitors.append(claude)
     answers.append(answer)
 
     # third answer from model
     gemini = "gemini-2.0-flash"
-    geminiClient = AsyncOpenAI(api_key=google_api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
     answer = await query_gpt(geminiClient, question, gemini)
     competitors.append(gemini)
     answers.append(answer)
 
     # fourth answer from model
     deepseek="deepseek-chat"
-    deepseekClient = AsyncOpenAI(api_key=deepseek_api_key, base_url="https://api.deepseek.com/v1")
     answer = await query_gpt(deepseekClient, question, deepseek)
     competitors.append(deepseek)
     answers.append(answer)
 
     # fifth answer from model
     llama = "llama-3.3-70b-versatile"
-    groqClient = AsyncOpenAI(api_key=groq_api_key, base_url="https://api.groq.com/openai/v1")
     answer = await query_gpt(groqClient, question, llama)
     competitors.append(llama)
     answers.append(answer)
@@ -141,12 +169,7 @@ async def main():
     formattedAnswers = await format_responses(answers)
 
     # rank llm answers
-    rankedAnswers = await rank_responses(client, competitors, question, formattedAnswers)
+    rankedAnswers = await rank_responses(openaiClient, competitors, question, formattedAnswers)
 
     # print answers
     await print_rankings(rankedAnswers, competitors)
-
-
-
-if __name__== "__main__":
-    asyncio.run(main())

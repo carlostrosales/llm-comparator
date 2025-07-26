@@ -3,3 +3,4 @@ openai-agents
 requests
 python-dotenv
 anthropic
+fastapi
