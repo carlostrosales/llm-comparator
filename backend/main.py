@@ -1,22 +1,17 @@
 import os
 import json
+import asyncio
 from dotenv import load_dotenv
-from openai import OpenAI
-from anthropic import Anthropic
-# from IPython.display import Markdown, display
+from openai import AsyncOpenAI, APIStatusError
+from anthropic import AsyncAnthropic
 
 load_dotenv(override=True)
 
-openai_api_key = os.getenv('OPENAI_API_KEY')
 anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
 google_api_key = os.getenv('GOOGLE_API_KEY')
 deepseek_api_key = os.getenv('DEEPSEEK_API_KEY')
 groq_api_key = os.getenv('GROQ_API_KEY')
 
-if openai_api_key:
-    print(f"OpenAI API Key exists and begins {openai_api_key[:8]}")
-else:
-    print("OpenAI API Key not set")
     
 if anthropic_api_key:
     print(f"Anthropic API Key exists and begins {anthropic_api_key[:7]}")
@@ -41,16 +36,16 @@ else:
 
 print("\n\n\n\n\n\n")
 
-
-request = "Please come up with a challenging, nuanced question that I can ask a number of LLMs to evaluate their intelligence. "
-request += "Answer only with the question, no explanation."
-
-messages=[{"role": "user", "content": request}]
-
-openai = OpenAI()
-response = openai.chat.completions.create(model="gpt-4o-mini", messages=messages)
-question = response.choices[0].message.content
-# print(question + "\n\n\n\n\n\n")
+async def generate_question(client: AsyncOpenAI, seed_prompt: str) -> str:
+    """
+    Ask the model to generate a challenging, nuanced question. 
+    Returns the question text.
+    """
+    try:
+        resp = await client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": seed_prompt}], timeout=30)
+        return resp.choices[0].message.content.strip()
+    except APIStatusError as e:
+        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
 
 competitors = []
 answers = []
@@ -147,8 +142,21 @@ for index, result in enumerate(ranks):
     print(f"Rank {index+1}: {competitor}")
 
 
-def main():
-    print("Script setup.")
+async def main():
+    openai_api_key = os.getenv('OPENAI_API_KEY')
+    if not openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY not set.")
+
+    client = AsyncOpenAI()
+
+    seed_prompt = (
+        "Please come up with a challenging, nuanced question that I can ask a number "
+        "of LLMs to evaluate their intelligence. Answer only with the question, no explanation."
+    )
+
+    question = await generate_question(client, seed_prompt)
+    print("Generated Question: \n\n\n", question)
+
 
 if __name__== "__main__":
-    main()
+    asyncio.run(main())
