@@ -6,11 +6,19 @@ from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException
 from typing import List, Literal
 from pydantic import BaseModel
-
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(override=True)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------------------------------------- Pydantic Schemas --------------------------------------------------------
 
