@@ -5,6 +5,7 @@ from openai import AsyncOpenAI, APIStatusError
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException
 from typing import List, Literal
+from pydantic import BaseModel
 
 
 load_dotenv(override=True)
@@ -26,7 +27,7 @@ class RunRequest(BaseModel):
 class RankedResult(BaseModel):
     question: str
     answers: List[dict]
-    ranking: List[dict]
+    ranking: List[str]
     raw_ranking_json: str
 
 # -------------------------------------------------------- Core Helpers --------------------------------------------------------
@@ -47,15 +48,17 @@ async def query_gpt(client: AsyncOpenAI, question: str, model_name: str) -> str:
     try:
         resp = await client.chat.completions.create(model=model_name, messages=[{"role": "user", "content": question}])
         return resp.choices[0].message.content.strip()
-    except APIStatusError as e:
-        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
+    except Exception as e:
+        raise RuntimeError(f"OpenAI API error: {str(e)}") from e
+
 
 async def query_claude(client: AsyncAnthropic, question: str, model_name: str) -> str:
     try:
         resp = await client.messages.create(model=model_name, messages=[{"role": "user", "content": question}], max_tokens=1000)
         return resp.content[0].text.strip()
-    except APIStatusError as e:
-        raise RuntimeError(f"OpenAI API error ({e.status.code}): {e.message}") from e
+    except Exception as e:
+        raise RuntimeError(f"Claude API error: {str(e)}") from e
+
 
 async def format_responses(answers: list) -> any:
     together = ""
@@ -135,41 +138,39 @@ async def run_competition(body: RunRequest):
     answers: List[str] = []
     models_and_clients = []
 
-    # first answer from model
-    gptMini = "gpt-4o-mini"
-    answer = await query_gpt(openaiClient, question, gptMini)
-    competitors.append(gptMini)
-    answers.append(answer)
+    for m in competitors:
+        if m == "gpt-4o-mini":
+            models_and_clients.append((m, openaiClient, query_gpt))
+        elif m == "claude-3-7-sonnet-latest":
+            models_and_clients.append((m, claudeClient, query_claude))
+        elif m == "gemini-2.0-flash":
+            models_and_clients.append((m, geminiClient, query_gpt))
+        elif  m == "deepseek-chat":
+            models_and_clients.append((m, deepseekClient, query_gpt))
+        elif m == "llama-3.3-70b-versatile":
+            models_and_clients.append((m, groqClient, query_gpt))
+        else:
+            raise HTTPException(status_code=400, detail="Unkown model: {m}")
 
-    # second answer from model
-    claude = "claude-3-7-sonnet-latest"
-    answer = await query_claude(claudeClient, question, claude)
-    competitors.append(claude)
-    answers.append(answer)
+    for (model_name, client, fn) in models_and_clients:
+        answers.append(await fn(client, question, model_name))
 
-    # third answer from model
-    gemini = "gemini-2.0-flash"
-    answer = await query_gpt(geminiClient, question, gemini)
-    competitors.append(gemini)
-    answers.append(answer)
+    raw_ranking = await rank_responses(openaiClient, competitors, question, answers)
 
-    # fourth answer from model
-    deepseek="deepseek-chat"
-    answer = await query_gpt(deepseekClient, question, deepseek)
-    competitors.append(deepseek)
-    answers.append(answer)
 
-    # fifth answer from model
-    llama = "llama-3.3-70b-versatile"
-    answer = await query_gpt(groqClient, question, llama)
-    competitors.append(llama)
-    answers.append(answer)
+    # rank models
+    try:
+        ranking_numbers = json.loads(raw_ranking)["results"]
+    except Exception:
+        raise HTTPException(status_code=502, detail=f"Judge returned malformed JSON: {raw_ranking}")
 
-    # format all llm answers
-    formattedAnswers = await format_responses(answers)
+    # map indices back to model names
+    ranking_models = [competitors[int(i) - 1] for i in ranking_numbers]
 
-    # rank llm answers
-    rankedAnswers = await rank_responses(openaiClient, competitors, question, formattedAnswers)
-
-    # print answers
-    await print_rankings(rankedAnswers, competitors)
+    # return answers
+    return RankedResult(
+        question=question, 
+        answers=[{"model": m, "answer": a} for m, a in zip(competitors, answers)], 
+        ranking=ranking_models,
+        raw_ranking_json=raw_ranking,
+        )
