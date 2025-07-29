@@ -7,10 +7,16 @@ from fastapi import FastAPI, HTTPException
 from typing import List, Literal
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 
 load_dotenv(override=True)
 
 app = FastAPI()
+
+app.mount("/assets", StaticFiles(directory=os.path.join(os.getenv("STATIC_DIR", "static"), "assets")), name="assets")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 # -------------------------------------------------------- Pydantic Schemas --------------------------------------------------------
 
@@ -117,6 +125,11 @@ async def print_rankings(rankings, competitors) -> None:
 
 # -------------------------------------------------------- Main Endpoint --------------------------------------------------------
 
+@app.get("/")
+async def serve_react_index():
+    return FileResponse(os.path.join(os.getenv("STATIC_DIR", "static"), "index.html"))
+
+
 @app.post("/run", response_model=RankedResult)
 async def run_competition(body: RunRequest):
     openai_api_key = os.getenv('OPENAI_API_KEY')
@@ -140,7 +153,7 @@ async def run_competition(body: RunRequest):
         "of LLMs to evaluate their intelligence. Answer only with the question, no explanation."
     )
 
-    question = await generate_question(openaiClient, seed_prompt)
+    # question = await generate_question(openaiClient, seed_prompt)
 
     competitors = body.competitors
     answers: List[str] = []
@@ -160,10 +173,11 @@ async def run_competition(body: RunRequest):
         else:
             raise HTTPException(status_code=400, detail="Unkown model: {m}")
 
-    for (model_name, client, fn) in models_and_clients:
-        answers.append(await fn(client, question, model_name))
+    answers = await asyncio.gather(
+        *[fn(client, seed_prompt, model_name) for (model_name, client, fn) in models_and_clients]
+    )
 
-    raw_ranking = await rank_responses(openaiClient, competitors, question, answers)
+    raw_ranking = await rank_responses(openaiClient, competitors, seed_prompt, answers)
 
 
     # rank models
@@ -177,7 +191,7 @@ async def run_competition(body: RunRequest):
 
     # return answers
     return RankedResult(
-        question=question, 
+        question=seed_prompt, 
         answers=[{"model": m, "answer": a} for m, a in zip(competitors, answers)], 
         ranking=ranking_models,
         raw_ranking_json=raw_ranking,

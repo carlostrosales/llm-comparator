@@ -27,7 +27,7 @@ export const Competition = () => {
         setLoading(true)
 
         try {
-            const response = await fetch("http://localhost:8000/run", {
+            const response = await fetch("/run", {
                 method: "POST",
                 headers: {"Content-Type": "application/json" },
                 body: JSON.stringify(payload)
@@ -58,6 +58,7 @@ export const Competition = () => {
 
     return (
         <div style={{display: "flex", flexDirection: "column", alignItems: "center"}}>
+            <span style={{marginBottom: '3rem', fontSize: '3rem', fontFamily: 'sans-serif'}}>LLM Ranker</span>
             <span>Enter a question to ask multiple LLMs.</span>
             <span>We will prompt and ask each one, then rank the responses for you.</span>
             <form onSubmit={(e) => {
@@ -71,14 +72,16 @@ export const Competition = () => {
             {
                 results && (
                     <div>
-                        <h2>Question:</h2>
-                        <p>{results.question}</p>
+                        <h2 style={{marginTop: '4rem'}}>Question:</h2>
+                        <p style={{marginBottom: '2rem'}}>{results.question}</p>
 
                         <h2>Answers:</h2>
                         {results.answers.map((answer, index) => (
-                            <div key={index}>
-                                <h4>{answer.model}</h4>
-                                <p>{answer.answer}</p>
+                            <div key={index} style={{}}>
+                                <h3>{answer.model}</h3>
+                                <pre style={{     whiteSpace: "pre-wrap", fontFamily: "inherit", padding: "1rem", borderRadius: "8px", border: "1px solid #ddd", overflowX: "auto", maxWidth: "60rem", }}>
+                                    {typeof answer.answer === "string" ? answer.answer : JSON.stringify(answer.answer, null, 2)}
+                                </pre>
                             </div>
                         ))}
 
